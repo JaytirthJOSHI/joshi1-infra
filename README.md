@@ -1,77 +1,54 @@
 # joshi1-infra
 
-DNS and Cloudflare routing for **joshi1.com** as code: Terraform with the official Cloudflare provider, GitHub Actions for plan-on-PR and apply-on-merge, and Terraform Cloud for remote state.
+DNS for **joshi1.com** as code: Terraform (Cloudflare provider), GitHub Actions (plan on PR, apply on `main`), Terraform Cloud for remote state.
 
 ## Layout
 
 | Path | Purpose |
 |------|---------|
 | `dns/main.tf` | Provider + zone data source |
-| `dns/variables.tf` | API token, zone ID, Pages CNAME targets, Worker script names |
-| `dns/records.tf` | DNS records (Pages + Worker hostnames) |
-| `dns/workers.tf` | Worker routes `firefly.joshi1.com/*` and `go.joshi1.com/*` |
-| `dns/outputs.tf` | Useful outputs after apply |
-| `dns/backend.tf.example` | Terraform Cloud backend (copied in CI) |
-| `.github/workflows/terraform.yml` | Plan on PR, apply on `main` |
+| `dns/variables.tf` | API token, zone ID |
+| `dns/records.tf` | All DNS records (synced from your Cloudflare export) |
+| `dns/outputs.tf` | Zone outputs |
+| `dns/backend.tf.example` | Terraform Cloud backend (generated in CI) |
+| `.github/workflows/terraform.yml` | CI |
 
-GitHub Actions expects workflow files under `.github/workflows/` with a `.yml` / `.yaml` suffix (not `.tf`).
+`dns/records.tf` matches the BIND-style export **`joshi1.com-3.txt`** (2026-05-03). SOA/NS are omitted (Cloudflare-managed). **Worker routes** are not in that export; manage them separately or add resources later.
 
-## What gets managed
+## First deploy — do not `apply` blindly
 
-| Hostname | Purpose |
-|----------|---------|
-| `joshi1.com` | Cloudflare Pages (apex CNAME, proxied) |
-| `firefly.joshi1.com` | Cloudflare Worker (proxied AAAA placeholder + Worker route) |
-| `go.joshi1.com` | Cloudflare Worker (Sink fork; same pattern) |
-| `admin.joshi1.com` | Cloudflare Pages |
-| `net.joshi1.com` | Cloudflare Pages (placeholder) |
+Existing records already live in Cloudflare. A plain **`terraform apply` with an empty state will try to create duplicates** and can fail or cause conflicts.
 
-Worker subdomains use a proxied `AAAA` record (`100::`) so the hostname resolves on Cloudflare’s edge while `cloudflare_workers_route` sends traffic to your deployed Worker scripts. The Worker scripts themselves are still deployed with Wrangler or your usual pipeline; Terraform only binds routes and DNS.
+**Before** the first merge that applies:
 
-### Alternative: Worker custom domains
-
-If you prefer the dashboard “Custom domains” model only, you can replace the AAAA + route pair with `cloudflare_workers_domain` (requires `CLOUDFLARE_ACCOUNT_ID` and Account-scoped API permissions). See the [provider docs](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs/resources/workers_domain). Do not duplicate the same hostname with both routes and `workers_domain` without checking Cloudflare for conflicts.
-
-## Prerequisites
-
-1. **Cloudflare** zone for `joshi1.com` on your account.
-2. **API token** with at least:
-   - Zone → DNS → Edit  
-   - Zone → Zone → Read  
-   - Zone → Workers Routes → Edit (for Worker routes)  
-   Create tokens under **My Profile → API Tokens**. The “Edit zone DNS” template is close; add **Workers Routes → Edit** for this repo.
-3. **Terraform Cloud** (free tier is fine) organization and a CLI-driven workspace named **`joshi1-infra-dns`** (or change the name in `dns/backend.tf.example` and the workflow).
-4. **GitHub** repository secrets and variables (below).
+1. Configure Terraform Cloud + GitHub secrets (below).
+2. **Import** each existing record into state (one-time), or use `terraform import` in a loop — see [Importing](#importing-existing-records).
+3. Run `terraform plan` until it shows **no changes** (or only intentional edits).
 
 ## GitHub configuration
 
-### Secrets (Settings → Secrets and variables → Actions)
+### Secrets
 
 | Name | Description |
 |------|-------------|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
+| `CLOUDFLARE_API_TOKEN` | Zone:DNS:Edit, Zone:Zone:Read |
 | `CLOUDFLARE_ZONE_ID` | Zone ID for `joshi1.com` |
-| `TF_API_TOKEN` | Terraform Cloud API token with access to the workspace |
+| `TF_API_TOKEN` | Terraform Cloud API token |
 
-### Variables (same settings page, **Variables** tab)
+### Variables
 
-| Name | Example | Description |
-|------|---------|-------------|
-| `TF_CLOUD_ORGANIZATION` | `your-org` | Terraform Cloud organization name (replaces `CHANGEME` in `backend.tf.example`) |
-| `PAGES_ROOT_CNAME_TARGET` | `my-site.pages.dev` | Pages custom domain target for the root site |
-| `PAGES_ADMIN_CNAME_TARGET` | `admin-site.pages.dev` | Admin dashboard Pages target |
-| `PAGES_NET_CNAME_TARGET` | `net-site.pages.dev` | Future `net` project (use a real or temporary Pages hostname) |
-| `WORKER_FIREFLY_SCRIPT_NAME` | `firefly` | Worker name in the dashboard |
-| `WORKER_GO_SCRIPT_NAME` | `go` | Worker name for the Sink fork |
+| Name | Description |
+|------|-------------|
+| `TF_CLOUD_ORGANIZATION` | Terraform Cloud org (replaces `CHANGEME` in `backend.tf.example`) |
 
-The workflow writes `dns/backend.tf` from `backend.tf.example` on each run so local development can stay on local state while CI always uses Terraform Cloud.
+Create workspace **`joshi1-infra-dns`** in Terraform Cloud (or rename in `dns/backend.tf.example` and keep CI in sync).
 
 ## Local usage
 
 ```bash
 cd dns
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with real values (file is gitignored).
+# Fill cloudflare_api_token and cloudflare_zone_id
 
 terraform init
 terraform fmt -recursive
@@ -79,48 +56,38 @@ terraform validate
 terraform plan
 ```
 
-For local Terraform Cloud state, copy the backend example and set your org:
-
-```bash
-cp backend.tf.example backend.tf
-# Edit CHANGEME → your Terraform Cloud organization
-terraform init
-```
-
-`backend.tf` is gitignored so you can use Terraform Cloud locally without committing org-specific config.
+For Terraform Cloud locally: `cp backend.tf.example backend.tf`, set your org, `terraform init`.
 
 ## Importing existing records
 
-After the first `terraform init`, import resources that already exist in Cloudflare so Terraform adopts them instead of trying to recreate them.
-
-1. Find IDs in the Cloudflare dashboard (**DNS → Records**; for routes, **Workers & Pages → your Worker → Routes**), or use the API / `curl`.
-2. Import using the addresses Terraform expects, for example:
+For each `cloudflare_record` in `dns/records.tf`, import using the **DNS record ID** from the Cloudflare API or dashboard:
 
 ```bash
-# DNS record (record ID from the dashboard or API)
-terraform import 'cloudflare_record.root_pages' "${CLOUDFLARE_ZONE_ID}/${RECORD_ID}"
-
-# Worker route (route ID from the API; import format is zone_id/route_id)
-terraform import 'cloudflare_workers_route.firefly' "${CLOUDFLARE_ZONE_ID}/${ROUTE_ID}"
+cd dns
+terraform import 'cloudflare_record.a_ai' "<ZONE_ID>/<RECORD_ID>"
 ```
 
-3. Run `terraform plan` until the diff is empty (you may need to adjust `records.tf` to match TTL, `proxied`, or `comment` exactly).
+List record IDs:
 
-If you prefer a greenfield cutover, you can delete conflicting dashboard records once (carefully), then `terraform apply` to recreate them under management—only do this if you understand the blast radius.
+```bash
+export CLOUDFLARE_ZONE_ID="..."
+export CLOUDFLARE_API_TOKEN="..."
+curl -sS "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/dns_records?per_page=500" \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  | jq -r '.result[] | "\(.type)\t\(.name)\t\(.id)"'
+```
 
-## Adding a new subdomain
+Match each row to the matching resource in `records.tf` (by type + name), then run `terraform import` for all 36 resources. After that, `terraform plan` should be clean.
 
-1. Add a `cloudflare_record` (and optional `cloudflare_workers_route` or Pages CNAME) in `dns/records.tf` or a new `.tf` file in `dns/`.
-2. Add variables if the value should differ per environment.
-3. Run `terraform fmt` and open a PR; confirm the plan comment looks correct, then merge to apply.
+## Updating DNS after the first import
 
-## CI behavior
+1. Edit `dns/records.tf` (or add a new `cloudflare_record`).
+2. Open a PR → review the plan comment → merge to apply.
 
-- **Pull requests targeting `main`**: `terraform fmt -check`, `init`, `validate`, `plan`. The plan is posted as a sticky PR comment.
-- **Push to `main`**: same through `init`, then `terraform apply -auto-approve`.
+## Re-syncing from a new Cloudflare export
 
-Workflow and Terraform files under `dns/` trigger runs.
+Download a fresh zone file from Cloudflare, diff against `records.tf`, and update Terraform so the file stays the source of truth.
 
-## Next step
+## Public repo note
 
-When this repo is wired to GitHub and Terraform Cloud, we can import your live `joshi1.com` records into state and reconcile any drift.
+Do not commit `terraform.tfvars` or API tokens. The zone export is mostly non-secret; it does list hostnames and targets (expected for DNS repos).

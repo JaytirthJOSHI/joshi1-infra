@@ -1,12 +1,7 @@
-# Copy to terraform.tfvars (gitignored) for local runs.
-# cloudflare_api_token can be omitted here if you export TF_VAR_cloudflare_api_token.
+# Copy to terraform.tfvars (gitignored).
 
 cloudflare_api_token = "your-token"
 cloudflare_zone_id   = "your-zone-id"
 
-pages_root_cname_target  = "your-root-site.pages.dev"
-pages_admin_cname_target = "your-admin.pages.dev"
-pages_net_cname_target   = "your-net.pages.dev"
-
-firefly_worker_script_name = "firefly"
-go_worker_script_name      = "go"
+# Optional; all record names are already relative to this zone.
+# domain = "joshi1.com"
