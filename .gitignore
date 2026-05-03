@@ -1,0 +1,14 @@
+# Terraform
+dns/.terraform/
+dns/*.tfstate
+dns/*.tfstate.*
+dns/*.tfplan
+dns/crash.log
+dns/override.tf
+dns/backend.tf
+dns/*.auto.tfvars
+dns/terraform.tfvars
+
+# Plans / CI artifacts
+dns/plan.txt
+dns/plan-comment.md

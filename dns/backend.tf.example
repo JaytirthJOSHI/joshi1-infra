@@ -1,0 +1,17 @@
+# Copy to backend.tf for Terraform Cloud remote state (recommended for CI).
+# In GitHub: set repository variable TF_CLOUD_ORGANIZATION and secret TF_API_TOKEN.
+# The deploy workflow generates backend.tf from this file automatically.
+#
+#   cp backend.tf.example backend.tf
+#   # edit CHANGEME to your Terraform Cloud organization name
+#
+# Multiple terraform {} blocks merge; versions.tf holds required_providers.
+
+terraform {
+  cloud {
+    organization = "CHANGEME"
+    workspaces {
+      name = "joshi1-infra-dns"
+    }
+  }
+}
