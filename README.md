@@ -15,15 +15,74 @@ DNS for **joshi1.com** as code: Terraform (Cloudflare provider), GitHub Actions 
 
 `dns/records.tf` matches the BIND-style export **`joshi1.com-3.txt`** (2026-05-03). SOA/NS are omitted (Cloudflare-managed). **Worker routes** are not in that export; manage them separately or add resources later.
 
-## First deploy — do not `apply` blindly
+## First-time setup (do this once)
 
-Existing records already live in Cloudflare. A plain **`terraform apply` with an empty state will try to create duplicates** and can fail or cause conflicts.
+Follow in order. **Do not merge PRs that trigger `terraform apply` until imports are done and `terraform plan` is clean.**
 
-**Before** the first merge that applies:
+### 1. Terraform Cloud
 
-1. Configure Terraform Cloud + GitHub secrets (below).
-2. **Import** each existing record into state (one-time), or use `terraform import` in a loop — see [Importing](#importing-existing-records).
-3. Run `terraform plan` until it shows **no changes** (or only intentional edits).
+1. Sign in at [app.terraform.io](https://app.terraform.io).
+2. Create an **organization** (if you do not have one).
+3. **Workspaces → New workspace → CLI-driven workflow** (or “No VCS”).
+4. Workspace name: **`joshi1-infra-dns`** (or change `dns/backend.tf.example` and the CI sed to match).
+5. Open **Settings → General → Execution mode** and set **Local** (Terraform runs on your laptop / GitHub runner; only **state** lives in Terraform Cloud). Save.
+
+### 2. Terraform Cloud token
+
+1. **User settings → Tokens** (or org settings) → create an API token with access to that workspace.
+2. **GitHub → your repo → Settings → Secrets → Actions** → add **`TF_API_TOKEN`** with that value.
+3. **Actions → Variables** → add **`TF_CLOUD_ORGANIZATION`** = your Terraform Cloud org name (exact string).
+
+### 3. Cloudflare token + zone ID
+
+1. Cloudflare **My Profile → API Tokens** → create a token with **Zone → DNS → Edit** and **Zone → Zone → Read** for `joshi1.com`.
+2. GitHub **Secrets**: **`CLOUDFLARE_API_TOKEN`**, **`CLOUDFLARE_ZONE_ID`** (zone overview in the dashboard).
+
+### 4. Local: backend + login
+
+```bash
+cd /path/to/joshi1-infra/dns
+cp backend.tf.example backend.tf
+# Edit backend.tf: replace CHANGEME with your Terraform Cloud org name
+terraform login   # opens browser; or set TF_TOKEN_app_terraform_io for CI-style non-interactive
+```
+
+### 5. Local: variables + init
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+# Set cloudflare_api_token and cloudflare_zone_id (or export TF_VAR_...)
+
+terraform init
+terraform validate
+```
+
+### 6. Import existing DNS into state (critical)
+
+**Do not `terraform apply` before this.** Generate import commands from the live zone (matches all **34** `cloudflare_record` resources):
+
+```bash
+export CLOUDFLARE_ZONE_ID="paste-zone-id"
+export CLOUDFLARE_API_TOKEN="paste-token"
+
+cd dns
+../scripts/gen-imports.py > /tmp/tf-imports.sh
+less /tmp/tf-imports.sh    # sanity check
+bash /tmp/tf-imports.sh    # may take a minute; ignore "already imported" if re-run
+terraform plan
+```
+
+You want **`No changes`** (or only tiny TTL/proxy drift you accept). If anything errors, fix `gen-imports.py` / records and re-run.
+
+### 7. Push to GitHub
+
+After **`terraform plan` is clean** with remote state, merge normally. CI will plan on PRs and apply on `main` using the same state.
+
+---
+
+## First deploy — reminder
+
+Existing records already live in Cloudflare. An **`terraform apply` on an empty state creates duplicates**. Always **import** first (step 6 above).
 
 ## GitHub configuration
 
@@ -77,7 +136,7 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/dns_r
   | jq -r '.result[] | "\(.type)\t\(.name)\t\(.id)"'
 ```
 
-Match each row to the matching resource in `records.tf` (by type + name), then run `terraform import` for all 36 resources. After that, `terraform plan` should be clean.
+Match each row to the matching resource in `records.tf` (by type + name + content), or use **`scripts/gen-imports.py`** to generate all `terraform import` lines. There are **34** `cloudflare_record` resources. After importing, `terraform plan` should be clean.
 
 ## Updating DNS after the first import
 
