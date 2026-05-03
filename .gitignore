@@ -12,3 +12,6 @@ dns/terraform.tfvars
 # Plans / CI artifacts
 dns/plan.txt
 dns/plan-comment.md
+
+# Python
+scripts/__pycache__/
